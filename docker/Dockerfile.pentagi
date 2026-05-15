@@ -1,0 +1,33 @@
+# ============================================================================
+# SENTINEL AI — Pentagi Pentest Image
+# Lightweight autonomous pentesting container.
+# Runs nmap + nikto + sqlmap + custom exploit chains.
+# Outputs JSON findings array to stdout for the worker to parse.
+# ============================================================================
+FROM python:3.11-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    nmap \
+    nikto \
+    curl \
+    wget \
+    git \
+    netcat-openbsd \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python pentest tools
+RUN pip install --no-cache-dir \
+    sqlmap \
+    impacket \
+    requests \
+    httpx \
+    rich
+
+COPY docker/pentagi/ /opt/pentagi/
+
+ENV PYTHONPATH=/opt/pentagi
+ENV PYTHONUNBUFFERED=1
+
+# Container receives TARGET via env variable
+# Outputs: JSON array of findings to stdout
+ENTRYPOINT ["python", "/opt/pentagi/run.py"]

@@ -1,0 +1,16 @@
+**/.git
+**/.venv
+**/__pycache__
+**/*.db
+**/*.log
+docker_out.txt
+audit_out2.txt
+tb.log
+tb_new.log
+**/.pytest_cache
+
+frontend/node_modules
+frontend/.next
+frontend/.env.local
+frontend/.env*.local
+node_modules

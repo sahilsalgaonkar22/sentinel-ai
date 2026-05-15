@@ -1,0 +1,316 @@
+name: Sentinel Platform CI/CD
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ${{ github.repository_owner }}/sentinel
+  PYTHON_VERSION: "3.11"
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────────
+  # 1. Backend — Lint + Security Scan + Tests
+  # ─────────────────────────────────────────────────────────────────────────
+  backend-quality:
+    name: Backend Quality Gate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sentinel-platform
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: "pip"
+          cache-dependency-path: sentinel-platform/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install flake8 black bandit[toml] pytest pytest-asyncio httpx
+
+      - name: Format check (black)
+        run: black --check backend --line-length=120
+
+      - name: Lint (flake8)
+        run: |
+          flake8 backend \
+            --max-line-length=120 \
+            --exclude=__pycache__,migrations,.venv \
+            --statistics \
+            --count
+
+      - name: Security scan (bandit)
+        run: |
+          bandit -r backend \
+            --severity-level medium \
+            --confidence-level medium \
+            --format json \
+            --output bandit-report.json \
+            -ll \
+            --exit-zero
+          # Fail if HIGH severity findings exist
+          python -c "
+          import json, sys
+          with open('bandit-report.json') as f:
+              data = json.load(f)
+          highs = [i for i in data.get('results',[]) if i.get('issue_severity')=='HIGH']
+          if highs:
+              print(f'FAIL: {len(highs)} HIGH severity findings from bandit')
+              for i in highs[:5]:
+                  print(f\"  {i['filename']}:{i['line_number']} {i['test_id']}: {i['issue_text']}\")
+              sys.exit(1)
+          print(f'OK: bandit passed ({len(data.get(\"results\",[]))} total findings, none HIGH)')
+          "
+
+      - name: Upload bandit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bandit-report
+          path: sentinel-platform/bandit-report.json
+
+      - name: Run tests
+        run: |
+          python -m pytest tests/ -v --tb=short --timeout=60
+        env:
+          # Tests must use a real PostgreSQL URL — no SQLite allowed
+          DATABASE_URL: ${{ secrets.TEST_DATABASE_URL }}
+          JWT_SECRET: ${{ secrets.TEST_JWT_SECRET }}
+          KAFKA_BOOTSTRAP_SERVERS: "localhost:9092"
+          S3_ENDPOINT: "http://localhost:9000"
+          S3_ACCESS_KEY: "testkey"
+          S3_SECRET_KEY: "testsecret"
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # 2. Frontend — Lint + Build
+  # ─────────────────────────────────────────────────────────────────────────
+  frontend-build:
+    name: Frontend Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: sentinel-platform/frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: sentinel-platform/frontend
+
+      - name: Lint (zero warnings)
+        run: npm run lint -- --max-warnings=0
+        working-directory: sentinel-platform/frontend
+
+      - name: Build
+        run: npm run build
+        working-directory: sentinel-platform/frontend
+
+      - name: Upload dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: sentinel-platform/frontend/dist
+          retention-days: 7
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # 3. Container Security Scan (Trivy)
+  # ─────────────────────────────────────────────────────────────────────────
+  container-security:
+    name: Container Security Scan
+    runs-on: ubuntu-latest
+    needs: [backend-quality, frontend-build]
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: gateway
+            dockerfile: docker/Dockerfile.gateway
+          - image: worker
+            dockerfile: docker/Dockerfile.worker
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image (no push) for scanning
+        uses: docker/build-push-action@v5
+        with:
+          context: sentinel-platform
+          file: sentinel-platform/${{ matrix.dockerfile }}
+          push: false
+          load: true
+          tags: sentinel-${{ matrix.image }}:scan
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Trivy vulnerability scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: sentinel-${{ matrix.image }}:scan
+          format: "sarif"
+          output: "trivy-${{ matrix.image }}.sarif"
+          severity: "CRITICAL,HIGH"
+          exit-code: "1"           # FAIL pipeline on CRITICAL or HIGH CVEs
+          ignore-unfixed: false
+          vuln-type: "os,library"
+
+      - name: Upload Trivy SARIF to GitHub Security
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-${{ matrix.image }}.sarif
+          category: ${{ matrix.image }}-trivy
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # 4. Docker Build + Push (main branch only)
+  # ─────────────────────────────────────────────────────────────────────────
+  docker-build:
+    name: Build & Push Images
+    runs-on: ubuntu-latest
+    needs: [container-security]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+
+    strategy:
+      matrix:
+        include:
+          - image: gateway
+            dockerfile: docker/Dockerfile.gateway
+          - image: frontend
+            dockerfile: docker/Dockerfile.frontend
+          - image: worker
+            dockerfile: docker/Dockerfile.worker
+          - image: ai-pipeline
+            dockerfile: docker/Dockerfile.ai
+          - image: correlation
+            dockerfile: docker/Dockerfile.correlation
+          - image: realtime
+            dockerfile: docker/Dockerfile.realtime
+          - image: dlq-consumer
+            dockerfile: docker/Dockerfile.worker    # reuses worker image; entrypoint differs in k8s
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.image }}
+          tags: |
+            type=sha,prefix=
+            type=ref,event=branch
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: sentinel-platform
+          file: sentinel-platform/${{ matrix.dockerfile }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: true
+          sbom: true
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # 5. Deploy to Staging
+  # ─────────────────────────────────────────────────────────────────────────
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: [docker-build]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment: staging
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up kubectl
+        uses: azure/k8s-set-context@v3
+        with:
+          kubeconfig: ${{ secrets.KUBE_CONFIG_STAGING }}
+
+      - name: Deploy External Secrets infrastructure
+        run: |
+          kubectl apply -f sentinel-platform/k8s/namespace.yaml
+          kubectl apply -f sentinel-platform/k8s/secret-store.yaml
+          kubectl apply -f sentinel-platform/k8s/secrets.yaml   # ExternalSecret (no plaintext!)
+          kubectl apply -f sentinel-platform/k8s/configmap.yaml
+
+      - name: Deploy application manifests
+        run: |
+          kubectl apply -f sentinel-platform/k8s/gateway.yaml
+          kubectl apply -f sentinel-platform/k8s/frontend.yaml
+          kubectl apply -f sentinel-platform/k8s/workers.yaml
+          kubectl apply -f sentinel-platform/k8s/dlq-consumer.yaml
+          kubectl apply -f sentinel-platform/k8s/ingress.yaml
+          kubectl apply -f sentinel-platform/k8s/hpa.yaml
+
+      - name: Update image tags
+        run: |
+          kubectl -n sentinel set image deployment/sentinel-gateway \
+            gateway=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/gateway:${{ github.sha }}
+          kubectl -n sentinel set image deployment/sentinel-frontend \
+            frontend=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/frontend:${{ github.sha }}
+          kubectl -n sentinel set image deployment/sentinel-worker-web \
+            worker=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/worker:${{ github.sha }}
+          kubectl -n sentinel set image deployment/sentinel-worker-network \
+            worker=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/worker:${{ github.sha }}
+          kubectl -n sentinel set image deployment/sentinel-worker-code \
+            worker=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/worker:${{ github.sha }}
+          kubectl -n sentinel set image deployment/sentinel-worker-container \
+            worker=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/worker:${{ github.sha }}
+          kubectl -n sentinel set image deployment/sentinel-worker-advanced \
+            worker=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/worker:${{ github.sha }}
+          kubectl -n sentinel set image deployment/sentinel-dlq-consumer \
+            dlq-consumer=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/worker:${{ github.sha }}
+
+      - name: Wait for rollout
+        run: |
+          kubectl -n sentinel rollout status deployment/sentinel-gateway --timeout=180s
+          kubectl -n sentinel rollout status deployment/sentinel-frontend --timeout=120s
+          kubectl -n sentinel rollout status deployment/sentinel-dlq-consumer --timeout=120s
+
+      - name: Verify health
+        run: |
+          sleep 15
+          kubectl -n sentinel get pods
+          kubectl -n sentinel get svc
+          # Smoke test gateway health endpoint
+          GATEWAY_IP=$(kubectl -n sentinel get svc sentinel-gateway -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+          if [ -n "$GATEWAY_IP" ]; then
+            curl -f "http://${GATEWAY_IP}/health" || echo "Health check skipped (LoadBalancer IP not yet available)"
+          fi

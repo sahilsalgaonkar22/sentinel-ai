@@ -1,0 +1,74 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Environment variables — NEVER commit the real .env file
+# .env.example IS committed (it contains only placeholders, no real secrets)
+.env
+.env.local
+.env.docker
+.env.*.local
+!.env.example
+
+# Secret key files — NEVER commit
+jwt_key.txt
+*.key
+*.pem
+*.p12
+secrets/
+
+# Database — NEVER commit
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs and temp files
+*.log
+*.txt.bak
+error.log
+audit.log
+*.pid
+
+# Audit and test artifacts (generated, not source)
+audit_out*.log
+audit_out*.txt
+audit_results.txt
+client_audit_results.json
+e2e_results.json
+docker_out.txt
+docker_startup.log
+live_test_out.txt
+unit_tests.log
+
+# Node
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.suo
+*.swp
+
+# Reports (generated PDFs)
+reports/*.pdf
+
+# ML Models (too large for git — download separately)
+# backend/models/*.joblib

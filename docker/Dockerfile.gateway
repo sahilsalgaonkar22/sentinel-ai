@@ -1,0 +1,108 @@
+# ============================================================================
+# SENTINEL AI — Gateway Docker Image (Hardened)
+# Security: non-root user, read-only filesystem (tmp mounted separately),
+#           minimal base image, no dev tools in image.
+# ============================================================================
+FROM python:3.11-slim AS builder
+
+WORKDIR /build
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY backend/requirements.txt .
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+
+# Install Python-based security scanners (SAST)
+RUN pip install --no-cache-dir --prefix=/install semgrep bandit pip-audit
+
+# ── Runtime stage ────────────────────────────────────────────────────────────
+FROM python:3.11-slim AS runtime
+
+WORKDIR /app
+
+# Runtime system dependencies + security scanner tools
+# In local execution mode, the gateway runs scans directly (not via Kafka workers)
+# so ALL scanner binaries must be available here.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq5 \
+    curl \
+    wget \
+    gnupg \
+    git \
+    nmap \
+    masscan \
+    perl \
+    libjson-perl \
+    libxml-writer-perl \
+    libnet-ssleay-perl \
+    apt-transport-https \
+    lsb-release \
+    unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Trivy (container vulnerability scanner)
+RUN wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | gpg --dearmor -o /usr/share/keyrings/trivy.gpg && \
+    echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb bookworm main" > /etc/apt/sources.list.d/trivy.list && \
+    apt-get update && \
+    apt-get install -y trivy && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install Nikto (web server scanner)
+RUN git clone --depth 1 https://github.com/sullo/nikto.git /opt/nikto \
+    && ln -s /opt/nikto/program/nikto.pl /usr/local/bin/nikto \
+    && chmod +x /opt/nikto/program/nikto.pl
+
+# Install Nuclei (template-based CVE scanner)
+RUN curl -fsSL https://github.com/projectdiscovery/nuclei/releases/download/v3.3.7/nuclei_3.3.7_linux_amd64.zip -o /tmp/nuclei.zip \
+    && unzip /tmp/nuclei.zip -d /usr/local/bin/ \
+    && chmod +x /usr/local/bin/nuclei \
+    && rm /tmp/nuclei.zip
+
+# Install Subfinder (subdomain enumeration)
+RUN curl -fsSL https://github.com/projectdiscovery/subfinder/releases/download/v2.6.7/subfinder_2.6.7_linux_amd64.zip -o /tmp/subfinder.zip \
+    && unzip /tmp/subfinder.zip -d /usr/local/bin/ \
+    && chmod +x /usr/local/bin/subfinder \
+    && rm /tmp/subfinder.zip
+
+# Install httpx (HTTP probing + tech fingerprinting)
+RUN curl -fsSL https://github.com/projectdiscovery/httpx/releases/download/v1.6.10/httpx_1.6.10_linux_amd64.zip -o /tmp/httpx-pd.zip \
+    && unzip /tmp/httpx-pd.zip -d /tmp/httpx-pd/ \
+    && mv /tmp/httpx-pd/httpx /usr/local/bin/httpx-pd \
+    && chmod +x /usr/local/bin/httpx-pd \
+    && rm -rf /tmp/httpx-pd /tmp/httpx-pd.zip
+
+# Install Gitleaks (secrets detection)
+RUN curl -fsSL https://github.com/gitleaks/gitleaks/releases/download/v8.21.2/gitleaks_8.21.2_linux_x64.tar.gz -o /tmp/gitleaks.tar.gz \
+    && tar xzf /tmp/gitleaks.tar.gz -C /usr/local/bin/ gitleaks \
+    && chmod +x /usr/local/bin/gitleaks \
+    && rm /tmp/gitleaks.tar.gz
+
+# Copy installed packages from builder
+COPY --from=builder /install /usr/local
+
+# Non-root user
+RUN groupadd -r sentinel && useradd -r -g sentinel -s /bin/false -u 1000 sentinel \
+    && mkdir -p /app/tmp && chown -R sentinel:sentinel /app
+
+COPY --chown=sentinel:sentinel . .
+
+ENV PYTHONPATH=/app
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+
+USER sentinel
+
+HEALTHCHECK --interval=15s --timeout=5s --start-period=45s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+EXPOSE 8000
+
+# GAP-3 FIX: Worker count tunable via UVICORN_WORKERS (default: 2)
+CMD ["sh", "-c", "uvicorn backend.gateway.main:app \
+     --host 0.0.0.0 \
+     --port 8000 \
+     --workers ${UVICORN_WORKERS:-2} \
+     --no-access-log"]

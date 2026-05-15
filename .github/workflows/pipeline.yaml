@@ -1,0 +1,185 @@
+name: Sentinel Platform CI/CD
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ${{ github.repository_owner }}/sentinel
+
+jobs:
+  # ─────────────────────────────────────
+  # Backend: Lint + Test
+  # ─────────────────────────────────────
+  backend-test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+
+    - name: Install dependencies
+      run: |
+        pip install -r requirements.txt
+        pip install flake8 pytest pytest-asyncio httpx
+      working-directory: sentinel-platform
+
+    - name: Lint
+      run: |
+        flake8 backend --max-line-length=120 --exclude=__pycache__,migrations
+      working-directory: sentinel-platform
+
+    - name: Run tests
+      run: |
+        python -m pytest tests/ -v --tb=short
+      working-directory: sentinel-platform
+      env:
+        DATABASE_URL: sqlite+aiosqlite:///./test.db
+        JWT_SECRET: test-secret
+        DEBUG: "true"
+
+  # ─────────────────────────────────────
+  # Frontend: Lint + Build
+  # ─────────────────────────────────────
+  frontend-build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'npm'
+        cache-dependency-path: sentinel-platform/frontend/package-lock.json
+
+    - name: Install dependencies
+      run: npm ci
+      working-directory: sentinel-platform/frontend
+
+    - name: Lint
+      run: npm run lint -- --max-warnings=0 || true
+      working-directory: sentinel-platform/frontend
+
+    - name: Build
+      run: npm run build
+      working-directory: sentinel-platform/frontend
+
+    - name: Upload build artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: frontend-dist
+        path: sentinel-platform/frontend/dist
+        retention-days: 7
+
+  # ─────────────────────────────────────
+  # Docker: Build + Push Images
+  # ─────────────────────────────────────
+  docker-build:
+    needs: [backend-test, frontend-build]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - image: gateway
+            dockerfile: docker/Dockerfile.gateway
+          - image: frontend
+            dockerfile: docker/Dockerfile.frontend
+          - image: worker
+            dockerfile: docker/Dockerfile.worker
+          - image: ai-pipeline
+            dockerfile: docker/Dockerfile.ai
+          - image: correlation
+            dockerfile: docker/Dockerfile.correlation
+          - image: realtime
+            dockerfile: docker/Dockerfile.realtime
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Log in to Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.image }}
+        tags: |
+          type=sha,prefix=
+          type=ref,event=branch
+          type=raw,value=latest,enable={{is_default_branch}}
+
+    - name: Build and push
+      uses: docker/build-push-action@v5
+      with:
+        context: sentinel-platform
+        file: sentinel-platform/${{ matrix.dockerfile }}
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+  # ─────────────────────────────────────
+  # Deploy to Staging (on main push)
+  # ─────────────────────────────────────
+  deploy-staging:
+    needs: [docker-build]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up kubectl
+      uses: azure/k8s-set-context@v3
+      with:
+        kubeconfig: ${{ secrets.KUBE_CONFIG_STAGING }}
+
+    - name: Deploy to Kubernetes
+      run: |
+        kubectl apply -f sentinel-platform/k8s/namespace.yaml
+        kubectl apply -f sentinel-platform/k8s/configmap.yaml
+        kubectl apply -f sentinel-platform/k8s/gateway.yaml
+        kubectl apply -f sentinel-platform/k8s/frontend.yaml
+        kubectl apply -f sentinel-platform/k8s/workers.yaml
+        kubectl apply -f sentinel-platform/k8s/ingress.yaml
+
+    - name: Update images
+      run: |
+        kubectl -n sentinel set image deployment/sentinel-gateway gateway=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/gateway:${{ github.sha }}
+        kubectl -n sentinel set image deployment/sentinel-frontend frontend=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/frontend:${{ github.sha }}
+        kubectl -n sentinel set image deployment/sentinel-worker-web worker=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/worker:${{ github.sha }}
+        kubectl -n sentinel set image deployment/sentinel-worker-network worker=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/worker:${{ github.sha }}
+        kubectl -n sentinel set image deployment/sentinel-worker-code worker=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/worker:${{ github.sha }}
+        kubectl -n sentinel set image deployment/sentinel-worker-container worker=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/worker:${{ github.sha }}
+        kubectl -n sentinel set image deployment/sentinel-worker-advanced worker=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/worker:${{ github.sha }}
+
+    - name: Wait for rollout
+      run: |
+        kubectl -n sentinel rollout status deployment/sentinel-gateway --timeout=120s
+        kubectl -n sentinel rollout status deployment/sentinel-frontend --timeout=120s
+
+    - name: Verify health
+      run: |
+        sleep 10
+        kubectl -n sentinel get pods
+        kubectl -n sentinel get svc

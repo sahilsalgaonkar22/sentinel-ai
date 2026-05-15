@@ -1,0 +1,115 @@
+# =========================
+# CORE API
+# =========================
+fastapi
+uvicorn[standard]
+httpx
+aiofiles
+python-multipart
+
+# =========================
+# DATABASE
+# =========================
+sqlalchemy[asyncio]
+asyncpg
+psycopg[binary]
+alembic
+
+# =========================
+# AUTH & SECURITY (FINAL)
+# =========================
+python-jose[cryptography]
+passlib[bcrypt]==1.7.4
+bcrypt==3.2.2
+email-validator>=2.1.0
+
+# =========================
+# CACHE / RATE LIMIT
+# =========================
+redis
+slowapi
+
+# =========================
+# KAFKA
+# =========================
+confluent-kafka
+
+# =========================
+# AI / ML
+# =========================
+numpy
+pandas
+scikit-learn
+xgboost
+
+# =========================
+# STORAGE
+# =========================
+boto3
+botocore
+
+# =========================
+# OBSERVABILITY
+# =========================
+prometheus-fastapi-instrumentator
+prometheus-client
+sentry-sdk[fastapi]>=1.40.0
+opentelemetry-api>=1.24.0
+opentelemetry-sdk>=1.24.0
+opentelemetry-instrumentation-fastapi>=0.45b0
+opentelemetry-exporter-otlp-proto-http>=1.24.0
+
+# =========================
+# REPORTING
+# =========================
+reportlab
+fpdf2
+
+# =========================
+# CONFIG
+# =========================
+pydantic-settings
+python-dotenv
+tenacity
+
+# =========================
+# TESTING
+# =========================
+pytest
+pytest-asyncio
+
+# =========================
+# SEARCH
+# =========================
+elasticsearch[async]>=8.0.0
+
+# =========================
+# VECTOR / DEDUP
+# =========================
+faiss-cpu>=1.7.4
+
+# =========================
+# LLM
+# =========================
+openai>=1.6.0
+google-generativeai>=0.8.0
+
+# =========================
+# SECURITY EXTRAS
+# =========================
+defusedxml>=0.7.1       # XXE-safe XML parsing in tool_executor
+
+# =========================
+# SCHEDULING
+# =========================
+croniter>=2.0.1
+
+# =========================
+# JOB PERSISTENCE
+# =========================
+joblib>=1.3.0
+
+# =========================
+# SETTINGS SCHEMA
+# =========================
+pydantic[email]>=2.5.0

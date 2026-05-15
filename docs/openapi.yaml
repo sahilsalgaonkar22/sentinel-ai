@@ -1,0 +1,257 @@
+
+openapi: 3.0.0
+info:
+  title: SENTINEL AI API
+  description: API for SENTINEL AI, a vulnerability management platform.
+  version: 1.0.0
+
+servers:
+  - url: /api/v1
+
+paths:
+  /auth/register:
+    post:
+      tags:
+        - Auth
+      summary: Register a new user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: User created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/login:
+    post:
+      tags:
+        - Auth
+      summary: Log in a user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Successful login
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /scans:
+    post:
+      tags:
+        - Scans
+      summary: Create a new scan
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScanCreate'
+      responses:
+        '202':
+          description: Scan accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScanResponse'
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    get:
+      tags:
+        - Scans
+      summary: Get a list of scans
+      responses:
+        '200':
+          description: A list of scans
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScanListResponse'
+
+  /scans/{scan_id}:
+    get:
+      tags:
+        - Scans
+      summary: Get a single scan by ID
+      parameters:
+        - name: scan_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: A single scan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScanResponse'
+        '404':
+          description: Scan not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /vulnerabilities:
+    get:
+      tags:
+        - Vulnerabilities
+      summary: Get a list of vulnerabilities
+      responses:
+        '200':
+          description: A list of vulnerabilities
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VulnListResponse'
+
+  /vulnerabilities/{vuln_id}:
+    get:
+      tags:
+        - Vulnerabilities
+      summary: Get a single vulnerability by ID
+      parameters:
+        - name: vuln_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: A single vulnerability
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VulnerabilityResponse'
+        '404':
+          description: Vulnerability not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /assets:
+    post:
+      tags:
+        - Assets
+      summary: Create a new asset
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssetCreate'
+      responses:
+        '201':
+          description: Asset created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssetResponse'
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    get:
+      tags:
+        - Assets
+      summary: Get a list of assets
+      responses:
+        '200':
+          description: A list of assets
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssetListResponse'
+
+  /reports:
+    post:
+      tags:
+        - Reports
+      summary: Create a new report
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReportCreate'
+      responses:
+        '202':
+          description: Report generation started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReportResponse'
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  schemas:
+    LoginRequest:
+      $ref: './schemas/auth.py#/LoginRequest'
+    RegisterRequest:
+      $ref: './schemas/auth.py#/RegisterRequest'
+    TokenResponse:
+      $ref: './schemas/auth.py#/TokenResponse'
+    UserResponse:
+      $ref: './schemas/auth.py#/UserResponse'
+    ScanCreate:
+      $ref: './schemas/scan.py#/ScanCreate'
+    ScanResponse:
+      $ref: './schemas/scan.py#/ScanResponse'
+    ScanListResponse:
+      $ref: './schemas/scan.py#/ScanListResponse'
+    FindingResponse:
+      $ref: './schemas/vulnerability.py#/FindingResponse'
+    VulnerabilityResponse:
+      $ref: './schemas/vulnerability.py#/VulnerabilityResponse'
+    VulnListResponse:
+      $ref: './schemas/vulnerability.py#/VulnListResponse'
+    AssetCreate:
+      $ref: './schemas/asset.py#/AssetCreate'
+    AssetResponse:
+      $ref: './schemas/asset.py#/AssetResponse'
+    AssetListResponse:
+      $ref: './schemas/asset.py#/AssetListResponse'
+    ReportCreate:
+      $ref: './schemas/reporting.py#/ReportCreate'
+    ReportResponse:
+      $ref: './schemas/reporting.py#/ReportResponse'
+    ErrorResponse:
+      $ref: './schemas/error.py#/ErrorResponse'

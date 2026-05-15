@@ -1,0 +1,143 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sentinel-gateway
+  namespace: sentinel
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: sentinel-gateway
+  template:
+    metadata:
+      labels:
+        app: sentinel-gateway
+    spec:
+      containers:
+      - name: gateway
+        image: sentinel-gateway:latest
+        ports:
+        - containerPort: 8000
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: sentinel-secrets
+              key: database-url
+        - name: REDIS_URL
+          value: "redis://sentinel-redis:6379/0"
+        - name: KAFKA_BOOTSTRAP_SERVERS
+          value: "sentinel-kafka:9092"
+        - name: SENTINEL_EXECUTION_MODE
+          value: "distributed"
+        - name: SENTINEL_SMTP_HOST
+          value: "smtp.internal.network"
+        - name: SENTINEL_SMTP_PORT
+          value: "587"
+        - name: SENTINEL_SLACK_WEBHOOK
+          valueFrom:
+            secretKeyRef:
+              name: sentinel-secrets
+              key: slack-webhook
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sentinel-gateway
+  namespace: sentinel
+spec:
+  selector:
+    app: sentinel-gateway
+  ports:
+  - port: 80
+    targetPort: 8000
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: sentinel-ingress
+  namespace: sentinel
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+spec:
+  rules:
+  - host: sentinel.internal
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: sentinel-frontend
+            port:
+              number: 80
+      - path: /api
+        pathType: Prefix
+        backend:
+          service:
+            name: sentinel-gateway
+            port:
+              number: 80
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: sentinel-gateway-hpa
+  namespace: sentinel
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: sentinel-gateway
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sentinel-worker-network
+  namespace: sentinel
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: sentinel-worker-network
+  template:
+    metadata:
+      labels:
+        app: sentinel-worker-network
+    spec:
+      containers:
+      - name: worker
+        image: sentinel-worker:latest
+        command: ["python", "-m", "backend.workers.network_worker"]
+        envFrom:
+        - secretRef:
+            name: sentinel-secrets
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: sentinel-worker-network-hpa
+  namespace: sentinel
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: sentinel-worker-network
+  minReplicas: 3
+  maxReplicas: 20
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 80

@@ -1,0 +1,65 @@
+
+{
+  "scan.requested": {
+    "scan_id": "scan-123",
+    "name": "Nmap scan for web server",
+    "scan_type": "network",
+    "target_raw": "127.0.0.1",
+    "tools": ["nmap"],
+    "config": {
+      "ports": "80,443,8080",
+      "scripts": "vuln"
+    }
+  },
+  "scan.started": {
+    "scan_id": "scan-123",
+    "worker_id": "worker-nmap-abc",
+    "started_at": "2024-01-01T12:00:00Z"
+  },
+  "scan.progress": {
+    "scan_id": "scan-123",
+    "progress": 50,
+    "status_message": "Scanning port 8080"
+  },
+  "scan.completed": {
+    "scan_id": "scan-123",
+    "completed_at": "2024-01-01T12:30:00Z",
+    "raw_results_path": "s3://sentinel-results/scan-123/nmap.xml"
+  },
+  "finding.raw": {
+    "scan_id": "scan-123",
+    "finding_id": "finding-456",
+    "title": "Apache Tomcat AJP File Read / Inclusion",
+    "description": "A vulnerability in Apache Tomcat allows a remote attacker to read arbitrary files or include and execute arbitrary code on the server.",
+    "severity": "critical",
+    "tool_name": "nmap",
+    "raw_finding": {
+      "port": "8009",
+      "protocol": "ajp13",
+      "state": "open",
+      "service": "ajp",
+      "script_output": "..."
+    }
+  },
+  "finding.processed": {
+    "scan_id": "scan-123",
+    "finding_id": "finding-456",
+    "title": "Apache Tomcat AJP File Read / Inclusion",
+    "description": "A vulnerability in Apache Tomcat allows a remote attacker to read arbitrary files or include and execute arbitrary code on the server.",
+    "severity": "critical",
+    "cvss_score": 9.8,
+    "cve_id": "CVE-2020-1938",
+    "cwe_id": "CWE-22",
+    "remediation": "Upgrade to Apache Tomcat 9.0.31 or later.",
+    "is_false_positive": false,
+    "ai_risk_score": 9.9,
+    "exploit_available": true
+  },
+  "alert.critical": {
+    "finding_id": "finding-456",
+    "title": "Apache Tomcat AJP File Read / Inclusion",
+    "severity": "critical",
+    "cvss_score": 9.8,
+    "affected_asset": "web-server-1"
+  }
+}

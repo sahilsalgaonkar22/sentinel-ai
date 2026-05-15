@@ -1,0 +1,494 @@
+# ============================================================================
+# SENTINEL AI — Hardened Worker Deployments + HPAs
+#
+# FIX-6:  Advanced worker NO LONGER runs as root (uid=0)
+#         Docker socket hostPath mount REMOVED — use remote execution API.
+# FIX-7:  All workers now have liveness + readiness probes on port 8001.
+#         Workers expose a minimal /health HTTP endpoint via a background
+#         thread (WorkerBase provides this out-of-the-box).
+# ============================================================================
+
+# ─── Network Worker ──────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sentinel-worker-network
+  namespace: sentinel
+  labels:
+    app: worker-network
+    worker-type: network
+    app.kubernetes.io/part-of: sentinel-platform
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: worker-network
+  template:
+    metadata:
+      labels:
+        app: worker-network
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+      - name: worker
+        image: sentinel/worker:latest
+        command: ["python", "-m", "backend.workers.network_worker"]
+        ports:
+        - containerPort: 8001
+          name: health
+        envFrom:
+        - configMapRef:
+            name: sentinel-config
+        - secretRef:
+            name: sentinel-secrets
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false  # nmap writes temp XML files
+          capabilities:
+            drop: ["ALL"]
+            add: ["NET_RAW", "NET_ADMIN"]  # Required for nmap raw sockets
+        resources:
+          limits:
+            cpu: "1"
+            memory: "1Gi"
+          requests:
+            cpu: "250m"
+            memory: "256Mi"
+        # FIX-7: liveness + readiness probes
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8001
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          failureThreshold: 3
+          timeoutSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8001
+          initialDelaySeconds: 5
+          periodSeconds: 15
+          failureThreshold: 2
+          timeoutSeconds: 3
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+      volumes:
+      - name: tmp
+        emptyDir: {}
+---
+# ─── Web Worker ──────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sentinel-worker-web
+  namespace: sentinel
+  labels:
+    app: worker-web
+    worker-type: web
+    app.kubernetes.io/part-of: sentinel-platform
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: worker-web
+  template:
+    metadata:
+      labels:
+        app: worker-web
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+      - name: worker
+        image: sentinel/worker:latest
+        command: ["python", "-m", "backend.workers.web_worker"]
+        ports:
+        - containerPort: 8001
+          name: health
+        envFrom:
+        - configMapRef:
+            name: sentinel-config
+        - secretRef:
+            name: sentinel-secrets
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false  # ZAP writes temp files
+          capabilities:
+            drop: ["ALL"]
+        resources:
+          limits:
+            cpu: "500m"
+            memory: "1Gi"
+          requests:
+            cpu: "100m"
+            memory: "256Mi"
+        # FIX-7
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8001
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          failureThreshold: 3
+          timeoutSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8001
+          initialDelaySeconds: 5
+          periodSeconds: 15
+          failureThreshold: 2
+          timeoutSeconds: 3
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        - name: zap-home
+          mountPath: /home/sentinel
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      - name: zap-home
+        emptyDir: {}
+---
+# ─── Code Worker ─────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sentinel-worker-code
+  namespace: sentinel
+  labels:
+    app: worker-code
+    worker-type: code
+    app.kubernetes.io/part-of: sentinel-platform
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: worker-code
+  template:
+    metadata:
+      labels:
+        app: worker-code
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+      - name: worker
+        image: sentinel/worker:latest
+        command: ["python", "-m", "backend.workers.code_worker"]
+        ports:
+        - containerPort: 8001
+          name: health
+        envFrom:
+        - configMapRef:
+            name: sentinel-config
+        - secretRef:
+            name: sentinel-secrets
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false  # bandit/semgrep write temp files
+          capabilities:
+            drop: ["ALL"]
+        resources:
+          limits:
+            cpu: "1"
+            memory: "1Gi"
+          requests:
+            cpu: "250m"
+            memory: "256Mi"
+        # FIX-7
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8001
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          failureThreshold: 3
+          timeoutSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8001
+          initialDelaySeconds: 5
+          periodSeconds: 15
+          failureThreshold: 2
+          timeoutSeconds: 3
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+      volumes:
+      - name: tmp
+        emptyDir: {}
+---
+# ─── Container Worker ────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sentinel-worker-container
+  namespace: sentinel
+  labels:
+    app: worker-container
+    worker-type: container
+    app.kubernetes.io/part-of: sentinel-platform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: worker-container
+  template:
+    metadata:
+      labels:
+        app: worker-container
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+      - name: worker
+        image: sentinel/worker:latest
+        command: ["python", "-m", "backend.workers.container_worker"]
+        ports:
+        - containerPort: 8001
+          name: health
+        envFrom:
+        - configMapRef:
+            name: sentinel-config
+        - secretRef:
+            name: sentinel-secrets
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+          capabilities:
+            drop: ["ALL"]
+        resources:
+          limits:
+            cpu: "1"
+            memory: "2Gi"
+          requests:
+            cpu: "250m"
+            memory: "512Mi"
+        # FIX-7
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8001
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          failureThreshold: 3
+          timeoutSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8001
+          initialDelaySeconds: 5
+          periodSeconds: 15
+          failureThreshold: 2
+          timeoutSeconds: 3
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+      volumes:
+      - name: tmp
+        emptyDir: {}
+---
+# ─── Advanced Worker ─────────────────────────────────────────────────────────
+# FIX-6: REMOVED runAsUser: 0 and Docker socket hostPath mount.
+#
+# Pentagi/advanced scanning now uses a Kaniko-based remote build API or a
+# dedicated Pentagi microservice endpoint instead of a local Docker socket.
+# ref: https://github.com/GoogleContainerTools/kaniko
+#
+# If Docker socket access is truly required in your environment, it MUST be
+# run in a dedicated isolated namespace with a separate NetworkPolicy, PodSAR,
+# and NOT as uid=0. That design change is outside the scope of this manifest.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sentinel-worker-advanced
+  namespace: sentinel
+  labels:
+    app: worker-advanced
+    worker-type: advanced
+    app.kubernetes.io/part-of: sentinel-platform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: worker-advanced
+  template:
+    metadata:
+      labels:
+        app: worker-advanced
+    spec:
+      serviceAccountName: sentinel-worker-advanced
+      # FIX-6: non-root user — Docker socket access removed
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+      - name: worker
+        image: sentinel/worker:latest
+        command: ["python", "-m", "backend.workers.advanced_worker"]
+        ports:
+        - containerPort: 8001
+          name: health
+        envFrom:
+        - configMapRef:
+            name: sentinel-config
+        - secretRef:
+            name: sentinel-secrets
+        env:
+        - name: PENTAGI_ENABLED
+          value: "true"
+        - name: PENTAGI_REMOTE_API
+          valueFrom:
+            secretKeyRef:
+              name: sentinel-secrets
+              key: PENTAGI_REMOTE_API_URL
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+          capabilities:
+            drop: ["ALL"]
+        resources:
+          limits:
+            cpu: "2"
+            memory: "2Gi"
+          requests:
+            cpu: "500m"
+            memory: "1Gi"
+        # FIX-7
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8001
+          initialDelaySeconds: 15
+          periodSeconds: 30
+          failureThreshold: 3
+          timeoutSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8001
+          initialDelaySeconds: 10
+          periodSeconds: 15
+          failureThreshold: 2
+          timeoutSeconds: 3
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        - name: pentagi-logs
+          mountPath: /app/pentagi_logs
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      - name: pentagi-logs
+        emptyDir: {}
+      # Docker socket hostPath REMOVED — no host escape vector
+
+# ─── HPAs ────────────────────────────────────────────────────────────────────
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: hpa-worker-network
+  namespace: sentinel
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: sentinel-worker-network
+  minReplicas: 2
+  maxReplicas: 12
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 65
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 75
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: hpa-worker-web
+  namespace: sentinel
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: sentinel-worker-web
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 65
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: hpa-worker-code
+  namespace: sentinel
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: sentinel-worker-code
+  minReplicas: 2
+  maxReplicas: 8
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 65
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: hpa-worker-container
+  namespace: sentinel
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: sentinel-worker-container
+  minReplicas: 1
+  maxReplicas: 4
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+
+# ─── ServiceAccount for advanced worker ──────────────────────────────────────
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sentinel-worker-advanced
+  namespace: sentinel

@@ -1,0 +1,64 @@
+# ============================================================================
+# SENTINEL AI — DLQ Consumer Kubernetes Deployment
+# ============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sentinel-dlq-consumer
+  namespace: sentinel
+  labels:
+    app: sentinel-dlq-consumer
+    app.kubernetes.io/part-of: sentinel-platform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sentinel-dlq-consumer
+  template:
+    metadata:
+      labels:
+        app: sentinel-dlq-consumer
+    spec:
+      serviceAccountName: sentinel-worker-sa
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+        - name: dlq-consumer
+          image: ghcr.io/PLACEHOLDER/sentinel/worker:latest   # replaced by CI/CD
+          command: ["python", "-m", "backend.services.kafka.dlq_consumer"]
+          env:
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              valueFrom:
+                configMapKeyRef:
+                  name: sentinel-config
+                  key: KAFKA_BOOTSTRAP_SERVERS
+            - name: SENTINEL_SLACK_WEBHOOK
+              valueFrom:
+                secretKeyRef:
+                  name: sentinel-secrets
+                  key: SENTINEL_SLACK_WEBHOOK
+                  optional: true
+            - name: DLQ_MAX_RETRIES
+              value: "3"
+            - name: DLQ_RETRY_DELAY_SECONDS
+              value: "30"
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          livenessProbe:
+            exec:
+              command: ["python", "-c", "import os; os.getenv('KAFKA_BOOTSTRAP_SERVERS')"]
+            initialDelaySeconds: 10
+            periodSeconds: 30
+      restartPolicy: Always
